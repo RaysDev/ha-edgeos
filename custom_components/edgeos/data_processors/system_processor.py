@@ -125,10 +125,13 @@ class SystemProcessor(BaseProcessor):
             system_data.upgrade_available = (
                 fw_latest_state == FW_LATEST_STATE_CAN_UPGRADE
             )
+            # Kept as it came, so that "the router has not checked" can be told
+            # apart from "the router checked and there is nothing newer"
+            system_data.upgrade_state = fw_latest_state
             system_data.upgrade_url = fw_latest_url
-            system_data.upgrade_version = fw_latest_version
+            system_data.upgrade_version = self._get_version(fw_latest_version)
 
-            system_data.sw_version = sw_latest
+            system_data.sw_version = self._get_version(sw_latest)
 
             login_details = system_details.get(SYSTEM_DATA_LOGIN, {})
             users = login_details.get(SYSTEM_DATA_LOGIN_USER, {})
@@ -243,6 +246,26 @@ class SystemProcessor(BaseProcessor):
             _LOGGER.error(
                 f"Failed to validate unit settings, Error: {ex}, Line: {line_number}"
             )
+
+    @staticmethod
+    def _get_version(value) -> str | None:
+        """Drop the model prefix EdgeOS puts in front of a version.
+
+        `EdgeRouter.ER-e300.v3.0.1.5862409.250924.1408` reads as
+        `v3.0.1.5862409.250924.1408`, which is what the router's own interface
+        shows. Anything not in that shape is left exactly as it came.
+        """
+        if value is None:
+            return None
+
+        text = str(value).strip()
+
+        if not text:
+            return None
+
+        _model, separator, version = text.partition(".v")
+
+        return f"v{version}" if separator else text
 
     @staticmethod
     def _get_last_reset(uptime):

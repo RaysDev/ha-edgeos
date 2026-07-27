@@ -1,13 +1,12 @@
 """
 This component provides support for EdgeOS based devices.
 For more details about this component, please refer to the documentation at
-https://github.com/elad-bar/ha-EdgeOS
+https://github.com/blchinezu/ha-edgeos
 """
 import logging
 import sys
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_START
 from homeassistant.core import HomeAssistant
 
 from .common.consts import DEFAULT_NAME, DOMAIN
@@ -47,15 +46,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-            if hass.is_running:
-                _LOGGER.debug("Initializing coordinator")
-                await coordinator.initialize()
-
-            else:
-                _LOGGER.debug("Registering listener for HA started event")
-                hass.bus.async_listen_once(
-                    EVENT_HOMEASSISTANT_START, coordinator.on_home_assistant_start
-                )
+            # Initializing does not perform any network access, it sets the
+            # platforms up and hands the connection over to a background
+            # supervisor. Waiting for `EVENT_HOMEASSISTANT_START` instead used to
+            # mean that anything that made that event handler fail left the
+            # integration loaded but permanently idle.
+            _LOGGER.debug("Initializing coordinator")
+            await coordinator.initialize()
 
             _LOGGER.info("Finished loading integration")
 
@@ -81,16 +78,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
     _LOGGER.info(f"Unloading {DOMAIN} integration, Entry ID: {entry.entry_id}")
 
-    coordinator: Coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: Coordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
-    await coordinator.terminate()
+    # Stop the connection supervisor before the platforms go away, otherwise it
+    # keeps reconnecting into a half unloaded integration and the reload ends up
+    # with two connections fighting over the same entry
+    if coordinator is not None:
+        try:
+            await coordinator.terminate()
 
-    for platform in PLATFORMS:
-        await hass.config_entries.async_forward_entry_unload(entry, platform)
+        except Exception as ex:
+            _LOGGER.warning(f"Failed to terminate coordinator cleanly, Error: {ex}")
 
-    del hass.data[DOMAIN][entry.entry_id]
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    return True
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry):
@@ -99,9 +103,10 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     entry_id = entry.entry_id
 
-    coordinator: Coordinator = hass.data[DOMAIN][entry_id]
+    coordinator: Coordinator | None = hass.data.get(DOMAIN, {}).get(entry_id)
 
-    await coordinator.config_manager.remove(entry_id)
+    if coordinator is not None:
+        await coordinator.config_manager.remove(entry_id)
 
     result = await async_unload_entry(hass, entry)
 

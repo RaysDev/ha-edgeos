@@ -45,9 +45,11 @@ class IntegrationFlowManager:
 
     async def async_step(self, user_input: dict | None = None):
         """Manage the domain options."""
-        _LOGGER.info(f"Config flow started, Step: {self._flow_id}, Input: {user_input}")
+        # The input carries the password in clear text, so it is never logged
+        _LOGGER.debug(f"Config flow started, Step: {self._flow_id}")
 
         form_errors = None
+        error_key = None
 
         if user_input is None:
             if self._entry is None:
@@ -56,8 +58,6 @@ class IntegrationFlowManager:
             else:
                 user_input = {key: self._entry.data[key] for key in self._entry.data}
                 user_input[CONF_TITLE] = self._entry.title
-
-                _LOGGER.info(user_input)
 
                 await PasswordManager.decrypt(
                     self._hass, user_input, self._entry.entry_id
@@ -71,9 +71,17 @@ class IntegrationFlowManager:
 
                 api = RestAPI(self._hass, config_data)
 
-                await api.validate()
+                try:
+                    await api.validate()
 
-                if api.status == ConnectivityStatus.Connected:
+                    status = api.status
+
+                finally:
+                    # Validating opens a client session, which every attempt
+                    # would otherwise leave behind until Home Assistant stops
+                    await api.terminate()
+
+                if status == ConnectivityStatus.Connected:
                     _LOGGER.debug("User inputs are valid")
 
                     if self._entry is None:
@@ -92,7 +100,12 @@ class IntegrationFlowManager:
                     return self._flow_handler.async_create_entry(title=title, data=data)
 
                 else:
-                    error_key = ConnectivityStatus.get_ha_error(api.status)
+                    # Not every status has a mapping, and a form re-rendered
+                    # with no error on it looks like nothing happened at all
+                    error_key = (
+                        ConnectivityStatus.get_ha_error(status)
+                        or "invalid_server_details"
+                    )
 
             except LoginError:
                 error_key = "invalid_admin_credentials"

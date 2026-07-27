@@ -25,6 +25,9 @@ from ..common.consts import (
     API_DATA_LAST_UPDATE,
     API_DATA_SESSION_ID,
     BEGINS_WITH_SIX_DIGITS,
+    CONFIG_CHANGE_COMMIT,
+    CONFIG_CHANGE_COMMIT_ENDED,
+    DEFAULT_NAME,
     DEVICE_LIST,
     DISCONNECT_INTERVAL,
     DISCOVER_DEVICE_ITEMS,
@@ -32,24 +35,28 @@ from ..common.consts import (
     INTERFACE_DATA_MULTICAST,
     INTERFACES_MAIN_MAP,
     INTERFACES_STATS,
-    SIGNAL_DATA_CHANGED,
+    SIGNAL_CONFIG_CHANGED,
+    SIGNAL_WS_DATA_CHANGED,
     SIGNAL_WS_STATUS,
     STRING_COLON,
     STRING_COMMA,
     TRAFFIC_DATA_DEVICE_ITEMS,
     TRAFFIC_DATA_DIRECTIONS,
     TRAFFIC_DATA_INTERFACE_ITEMS,
+    WS_CLOSE_TIMEOUT,
     WS_CLOSING_MESSAGE,
     WS_COMPRESSION_DEFLATE,
+    WS_CONFIG_CHANGE_KEY,
+    WS_CONNECT_TIMEOUT,
     WS_DISCOVER_KEY,
     WS_EXPORT_KEY,
     WS_IGNORED_MESSAGES,
     WS_INTERFACES_KEY,
     WS_MAX_MSG_SIZE,
+    WS_RECEIVE_TIMEOUT,
     WS_RECEIVED_MESSAGES,
     WS_SESSION_ID,
     WS_SYSTEM_STATS_KEY,
-    WS_TIMEOUT,
     WS_TOPIC_NAME,
     WS_TOPIC_SUBSCRIBE,
     WS_TOPIC_UNSUBSCRIBE,
@@ -105,7 +112,7 @@ class WebSockets:
             line_number = tb.tb_lineno
 
             _LOGGER.error(
-                f"Failed to load MyDolphin Plus WS, error: {ex}, line: {line_number}"
+                f"Failed to load {DEFAULT_NAME} WS, error: {ex}, line: {line_number}"
             )
 
     @property
@@ -143,21 +150,50 @@ class WebSockets:
         self._can_log_messages = can_log_messages
 
     async def initialize(self):
+        """Connect and listen until the connection drops.
+
+        Returns once the connection is gone, the caller is responsible for
+        deciding whether to reconnect.
+        """
+        # The subscription is rejected without a session id and the router then
+        # stays silent, which used to look like a healthy but idle connection
+        if self._api_session_id is None:
+            _LOGGER.warning(
+                "Cannot connect WS, Reason: API did not provide a session id yet"
+            )
+
+            self._set_status(ConnectivityStatus.NotConnected)
+
+            return
+
         try:
             _LOGGER.debug("Initializing")
 
             await self._initialize_session()
 
-            async with self._session.ws_connect(
-                self._config_data.ws_url,
-                ssl=False,
-                autoclose=True,
-                max_msg_size=WS_MAX_MSG_SIZE,
-                timeout=WS_TIMEOUT,
-                compress=WS_COMPRESSION_DEFLATE,
-            ) as ws:
+            # Bounded, so that a router that accepts the TCP connection but never
+            # completes the upgrade cannot block the supervisor indefinitely
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    self._config_data.ws_url,
+                    ssl=False,
+                    autoclose=True,
+                    max_msg_size=WS_MAX_MSG_SIZE,
+                    timeout=WS_CLOSE_TIMEOUT,
+                    receive_timeout=WS_RECEIVE_TIMEOUT,
+                    compress=WS_COMPRESSION_DEFLATE,
+                ),
+                WS_CONNECT_TIMEOUT,
+            )
+
+            try:
                 self._ws = ws
+
                 await self._listen()
+
+            finally:
+                if not ws.closed:
+                    await ws.close()
 
         except Exception as ex:
             exc_type, exc_obj, tb = sys.exc_info()
@@ -177,21 +213,69 @@ class WebSockets:
 
                 self._set_status(ConnectivityStatus.Failed)
 
+        finally:
+            self._ws = None
+
+            await self._close_session()
+
     async def terminate(self):
         if self._remove_async_track_time is not None:
             self._remove_async_track_time()
             self._remove_async_track_time = None
 
         if self._ws is not None:
-            await self._ws.close()
+            try:
+                await self._ws.close()
 
-            await asyncio.sleep(DISCONNECT_INTERVAL)
+                await asyncio.sleep(DISCONNECT_INTERVAL)
+
+            except Exception as ex:
+                _LOGGER.debug(f"Failed to close WS gracefully, Error: {ex}")
 
         self._set_status(ConnectivityStatus.Disconnected)
         self._ws = None
 
+        await self._close_session()
+
+    async def async_disconnect(self):
+        """Close the socket without waiting for the listener to notice.
+
+        This releases a caller blocked in `initialize`, so that the connection
+        supervisor can come back round its loop and rebuild the whole session.
+        The status is deliberately left alone - the listen loop sets it as its
+        iteration ends, which keeps one place responsible for it.
+        """
+        ws = self._ws
+
+        if ws is None or ws.closed:
+            return
+
+        _LOGGER.debug("Closing WS to let the connection be rebuilt")
+
+        try:
+            await ws.close()
+
+        except Exception as ex:
+            _LOGGER.debug(f"Failed to close WS, Error: {ex}")
+
+    async def _close_session(self):
+        """Release the client session, a new one is created per connection."""
+        session = self._session
+        self._session = None
+
+        if session is None or session.closed:
+            return
+
+        try:
+            await session.close()
+
+        except Exception as ex:
+            _LOGGER.debug(f"Failed to close WS session, Error: {ex}")
+
     async def _initialize_session(self):
         try:
+            await self._close_session()
+
             if self._is_home_assistant:
                 self._session = async_create_clientsession(hass=self._hass)
 
@@ -297,7 +381,7 @@ class WebSockets:
 
                     await self._message_handler(payload_json)
 
-                    self._async_dispatcher_send(SIGNAL_DATA_CHANGED)
+                    self._async_dispatcher_send(SIGNAL_WS_DATA_CHANGED)
             else:
                 self._increase_counter(WS_IGNORED_MESSAGES)
 
@@ -416,11 +500,13 @@ class WebSockets:
         self.data[key] = counter - 1
 
     def _get_ws_handlers(self) -> dict:
+        # The keys double as the list of topics that gets subscribed to
         ws_handlers = {
             WS_EXPORT_KEY: self._handle_export,
             WS_INTERFACES_KEY: self._handle_interfaces,
             WS_SYSTEM_STATS_KEY: self._handle_system_stats,
             WS_DISCOVER_KEY: self._handle_discover,
+            WS_CONFIG_CHANGE_KEY: self._handle_config_change,
         }
 
         return ws_handlers
@@ -546,6 +632,35 @@ class WebSockets:
 
             _LOGGER.error(
                 f"Failed to load {WS_SYSTEM_STATS_KEY}, Error: {ex}, Line: {line_number}"
+            )
+
+    def _handle_config_change(self, data):
+        """Announce that the router's configuration was committed.
+
+        Anything derived from the configuration - firewall rules, interface
+        settings - is stale from this moment until it is read again, so this is
+        what makes those entities update within a second of a change instead of
+        waiting for the next scheduled poll.
+        """
+        try:
+            if not isinstance(data, dict):
+                return
+
+            commit = data.get(CONFIG_CHANGE_COMMIT)
+
+            _LOGGER.debug(f"Handle {WS_CONFIG_CHANGE_KEY} data, Commit: {commit}")
+
+            if commit != CONFIG_CHANGE_COMMIT_ENDED:
+                return
+
+            self._async_dispatcher_send(SIGNAL_CONFIG_CHANGED)
+
+        except Exception as ex:
+            exc_type, exc_obj, tb = sys.exc_info()
+            line_number = tb.tb_lineno
+
+            _LOGGER.error(
+                f"Failed to load {WS_CONFIG_CHANGE_KEY}, Error: {ex}, Line: {line_number}"
             )
 
     def _handle_discover(self, data):

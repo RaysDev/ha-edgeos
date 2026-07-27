@@ -7,9 +7,9 @@ from homeassistant.config_entries import STORAGE_VERSION
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import JSONEncoder
-from homeassistant.helpers.storage import Store
 
 from ..common.consts import CONFIGURATION_FILE, INVALID_TOKEN_SECTION, STORAGE_DATA_KEY
+from .store import IntegrationStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class PasswordManager:
             self._store = None
 
         else:
-            self._store = Store(
+            self._store = IntegrationStore(
                 hass, STORAGE_VERSION, CONFIGURATION_FILE, encoder=JSONEncoder
             )
 

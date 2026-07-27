@@ -2,6 +2,7 @@ import logging
 import sys
 
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.util import slugify
 
 from ..common.consts import (
     API_DATA_DHCP_LEASES,
@@ -10,6 +11,7 @@ from ..common.consts import (
     DATA_SYSTEM_SERVICE_DHCP_SERVER,
     DEFAULT_NAME,
     DEVICE_DATA_MAC,
+    DEVICE_MONITORING_NAME,
     DHCP_SERVER_IP_ADDRESS,
     DHCP_SERVER_LEASES,
     DHCP_SERVER_LEASES_CLIENT_HOSTNAME,
@@ -83,6 +85,42 @@ class DeviceProcessor(BaseProcessor):
 
         return device_info
 
+    def get_shared_device_info(self) -> DeviceInfo:
+        """The one device holding a monitoring toggle per EdgeOS device.
+
+        Without it every device on the network needs a device of its own just to
+        carry that toggle, which is most of them and none of them useful. A
+        device now only exists once its toggle is on, because Home Assistant
+        creates a device only when an entity points at it.
+        """
+        identifier = " ".join(
+            part
+            for part in [self._hostname, str(DeviceTypes.DEVICE_LIST)]
+            if part is not None
+        )
+        name = " ".join(
+            part
+            for part in [self._hostname, DEVICE_MONITORING_NAME]
+            if part is not None
+        )
+
+        return DeviceInfo(
+            identifiers={(DEFAULT_NAME, slugify(identifier))},
+            name=name,
+            model=DeviceTypes.DEVICE_LIST,
+            manufacturer=DEFAULT_NAME,
+            via_device=(DEFAULT_NAME, self._hostname),
+        )
+
+    def get_item_name(self, item_id: str | None = None) -> str | None:
+        """What one device's toggle is called on the shared device."""
+        device = self._devices.get(item_id)
+
+        if device is None:
+            return None if item_id is None else str(item_id)
+
+        return self._prettify(device.hostname) or device.hostname or str(item_id)
+
     def get_leased_devices(self) -> dict:
         return self._leased_devices
 
@@ -115,7 +153,12 @@ class DeviceProcessor(BaseProcessor):
                             hostname, domain_name, static_mapping_data, False
                         )
 
-                self._update_leased_devices()
+            # Once per pass, after every static mapping is known. Nested in the
+            # loop above it ran once per shared network, and not at all on a
+            # router with none configured - where `Unknown Devices` then always
+            # reported zero.
+            self._update_leased_devices()
+
         except Exception as ex:
             exc_type, exc_obj, tb = sys.exc_info()
             line_number = tb.tb_lineno
@@ -202,6 +245,25 @@ class DeviceProcessor(BaseProcessor):
 
         else:
             device_data = existing_device_data
+
+            # The address is what the traffic analysis stream is matched on. It
+            # used to be kept at whatever it was when the device was first seen,
+            # so a device that changed address stopped being matched at all -
+            # its traffic sensors froze and its tracker reported away for good.
+            if ip_address is not None and ip_address != device_data.ip:
+                self._devices_ip_mapping.pop(device_data.ip, None)
+
+                device_data.ip = ip_address
+
+            # A static mapping means the device is known, whichever order it was
+            # read in. Never the other way round: a lease seen after the mapping
+            # would otherwise hide the device from discovery.
+            if not is_leased:
+                device_data.is_leased = False
+
+            # `hostname` is deliberately left alone. `get_device_info` builds the
+            # device identifier from it, so changing it here would orphan the
+            # device already registered in Home Assistant.
 
         self._devices[device_data.unique_id] = device_data
         self._devices_ip_mapping[device_data.ip] = device_data.unique_id

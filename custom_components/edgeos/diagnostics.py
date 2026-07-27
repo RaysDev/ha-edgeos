@@ -4,16 +4,69 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntry
 
-from .common.consts import DEVICE_DATA_MAC, DOMAIN, INTERFACE_DATA_NAME
+from .common.consts import (
+    DEVICE_DATA_MAC,
+    DOMAIN,
+    FIREWALL_RULE_DATA_IS_IPV6,
+    FIREWALL_RULE_DATA_NUMBER,
+    FIREWALL_RULE_DATA_RULESET,
+    FIREWALL_RULE_ID_IPV6_PREFIX,
+    FIREWALL_RULE_ID_SEPARATOR,
+    INTERFACE_DATA_NAME,
+)
 from .common.enums import DeviceTypes
 from .managers.coordinator import Coordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# The diagnostics payload embeds the API data as it was received, which includes
+# the session cookies and the whole `get.json` configuration tree. Depending on
+# how the router is set up, that tree carries user password hashes, VPN keys and
+# dynamic DNS credentials - and a diagnostics download is the file users attach
+# to bug reports. Matched at any depth.
+#
+# The username is deliberately not redacted: it is low value to an attacker, and
+# the admin detection looks the logged in user up in the configuration by name,
+# which is one of the things diagnostics are needed to debug.
+TO_REDACT = {
+    "authentication",
+    "cookies",
+    "encrypted-password",
+    "key",
+    "password",
+    "plaintext-password",
+    "pre-shared-key",
+    "pre-shared-secret",
+    "private-key",
+    "secret",
+    "session-id",
+}
+
+
+def _get_firewall_rule_ids(items: list[dict]) -> list[str]:
+    """One rule per rule-set, since a rule-set is what a device now stands for."""
+    rule_ids = {}
+
+    for item in items:
+        parts = [
+            item.get(FIREWALL_RULE_DATA_RULESET),
+            item.get(FIREWALL_RULE_DATA_NUMBER),
+        ]
+
+        if item.get(FIREWALL_RULE_DATA_IS_IPV6):
+            parts.insert(0, FIREWALL_RULE_ID_IPV6_PREFIX)
+
+        rule_id = FIREWALL_RULE_ID_SEPARATOR.join(parts)
+
+        rule_ids.setdefault(FIREWALL_RULE_ID_SEPARATOR.join(parts[:-1]), rule_id)
+
+    return list(rule_ids.values())
 
 
 async def async_get_config_entry_diagnostics(
@@ -46,7 +99,9 @@ def _async_get_diagnostics(
     """Return diagnostics for a config entry."""
     _LOGGER.debug("Getting diagnostic information")
 
-    debug_data = coordinator.get_debug_data()
+    # `async_redact_data` returns copies, so the coordinator's live data is not
+    # touched by producing a diagnostics report
+    debug_data = async_redact_data(coordinator.get_debug_data(), TO_REDACT)
 
     data = {
         "disabled_by": entry.disabled_by,
@@ -79,6 +134,7 @@ def _async_get_diagnostics(
         system_data = processor_data[DeviceTypes.SYSTEM]
         device_data = processor_data[DeviceTypes.DEVICE]
         interface_data = processor_data[DeviceTypes.INTERFACE]
+        firewall_rule_data = processor_data[DeviceTypes.FIREWALL_RULE]
 
         data.update(
             devices=[
@@ -100,6 +156,21 @@ def _async_get_diagnostics(
                     item,
                 )
                 for item in interface_data
+            ],
+            firewall_rule_sets=[
+                _async_device_as_dict(
+                    hass,
+                    coordinator.get_device_identifiers(
+                        DeviceTypes.FIREWALL_RULE, rule_id
+                    ),
+                    coordinator.get_device_data(
+                        str(DeviceTypes.FIREWALL_RULESET),
+                        coordinator.get_device_identifiers(
+                            DeviceTypes.FIREWALL_RULE, rule_id
+                        ),
+                    ),
+                )
+                for rule_id in _get_firewall_rule_ids(firewall_rule_data)
             ],
             system=_async_device_as_dict(
                 hass,

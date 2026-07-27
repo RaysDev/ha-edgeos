@@ -29,6 +29,7 @@ class EdgeOSSystemData:
     fw_version: str | None
     sw_version: str | None
     upgrade_available: bool
+    upgrade_state: str | None
     upgrade_url: str | None
     upgrade_version: str | None
     product: str | None
@@ -56,6 +57,7 @@ class EdgeOSSystemData:
         self.cpu = None
         self.mem = None
         self.upgrade_available = False
+        self.upgrade_state = None
         self.upgrade_url = None
         self.upgrade_version = None
         self.user_level = None

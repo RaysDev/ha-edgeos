@@ -40,11 +40,31 @@ class BaseProcessor:
         self._process_api_data()
         self._process_ws_data()
 
+    def update_ws_data(self, ws_data: dict):
+        """Re-derive only what the statistics stream provides.
+
+        The router's configuration is re-read when a poll falls due or a commit
+        is announced, never by one of these messages, so deriving it again here
+        - for every interface, every DHCP lease and every firewall rule, once or
+        twice a second - could not produce a different answer.
+
+        Only safe once `update` has run at least once, because the statistics
+        are attached to the objects that pass builds.
+        """
+        self._ws_data = ws_data
+
+        self._process_ws_data()
+
     def _process_api_data(self):
         system_section = self._api_data.get(API_DATA_SYSTEM, {})
         system_details = system_section.get(DATA_SYSTEM_SYSTEM, {})
 
-        self._hostname = system_details.get(SYSTEM_DATA_HOSTNAME).upper()
+        hostname = system_details.get(SYSTEM_DATA_HOSTNAME)
+
+        # Raised an AttributeError before any configuration had been read, which
+        # aborted every processor rather than letting the caller notice that the
+        # hostname is not known yet
+        self._hostname = None if hostname is None else hostname.upper()
 
     def _process_ws_data(self):
         pass
@@ -69,6 +89,52 @@ class BaseProcessor:
         )
 
         return device_info
+
+    def get_item_name(self, item_id: str | None = None) -> str | None:
+        """What one item is called within the device that holds it.
+
+        Used where a single device holds many entities that differ by item
+        rather than by kind - a firewall rule-set holding its rules, or the
+        shared device holding a monitoring toggle per EdgeOS device. `None`
+        means the processor has no opinion and the name is built from the entity
+        description, as it is for everything else.
+        """
+        return None
+
+    def get_shared_device_info(self) -> DeviceInfo | None:
+        """The one device that holds this type's item entities, if it has one."""
+        return None
+
+    @staticmethod
+    def _prettify(text: str | None) -> str | None:
+        """Make a configured name read as a name.
+
+        Names are usually written `block-kid-tablet` or `Android-Nexus6`. One
+        that already contains a space was written as prose and is left exactly
+        as typed. Otherwise separators become spaces, and a word is capitalised
+        only when it is entirely lower case - so `iPhone`, `NAS`, `DNS` and
+        `IPv6` survive intact.
+        """
+        if text is None:
+            return None
+
+        stripped = text.strip()
+
+        if not stripped:
+            return None
+
+        if " " in stripped:
+            return stripped
+
+        words = stripped.replace("-", " ").replace("_", " ").split()
+
+        if not words:
+            return None
+
+        return " ".join(
+            word if any(letter.isupper() for letter in word) else word.capitalize()
+            for word in words
+        )
 
     def _get_device_info_name(self, item_id: str | None = None):
         parts = [self._hostname, self.processor_type, item_id]

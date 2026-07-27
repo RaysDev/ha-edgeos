@@ -1,13 +1,5 @@
-from copy import copy
 from dataclasses import dataclass
 
-from custom_components.edgeos.common.consts import ENTITY_VALIDATIONS, UNIT_MAPPING
-from custom_components.edgeos.common.enums import (
-    DeviceTypes,
-    EntityKeys,
-    EntityValidation,
-    UnitOfEdgeOS,
-)
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntityDescription,
@@ -20,8 +12,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.components.switch import SwitchEntityDescription
+from homeassistant.components.update import UpdateEntityDescription
 from homeassistant.const import PERCENTAGE, EntityCategory, Platform, UnitOfTime
 from homeassistant.helpers.entity import EntityDescription
+
+from .consts import ENTITY_VALIDATIONS, UNIT_MAPPING
+from .enums import DeviceTypes, EntityKeys, EntityValidation, UnitOfEdgeOS
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -29,6 +25,11 @@ class IntegrationEntityDescription(EntityDescription):
     platform: Platform | None = None
     device_type: DeviceTypes | None = None
     entity_validation: EntityValidation | None = None
+
+    # Whether this entity belongs to the one shared device for its type rather
+    # than to the device of the item it refers to. Set with `has_entity_name`,
+    # which is what makes it take the item's name instead of its kind's.
+    on_shared_device: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,6 +70,13 @@ class IntegrationDeviceTrackerEntityDescription(IntegrationEntityDescription):
 
 
 @dataclass(frozen=True, kw_only=True)
+class IntegrationUpdateEntityDescription(
+    UpdateEntityDescription, IntegrationEntityDescription
+):
+    platform: Platform | None = Platform.UPDATE
+
+
+@dataclass(frozen=True, kw_only=True)
 class IntegrationNumberEntityDescription(
     NumberEntityDescription, IntegrationEntityDescription
 ):
@@ -90,9 +98,8 @@ ENTITY_DESCRIPTIONS: list[IntegrationEntityDescription] = [
         icon="mdi:memory",
         device_type=DeviceTypes.SYSTEM,
     ),
-    IntegrationBinarySensorEntityDescription(
+    IntegrationUpdateEntityDescription(
         key=EntityKeys.FIRMWARE,
-        device_class=BinarySensorDeviceClass.UPDATE,
         device_type=DeviceTypes.SYSTEM,
     ),
     IntegrationSensorEntityDescription(
@@ -124,7 +131,7 @@ ENTITY_DESCRIPTIONS: list[IntegrationEntityDescription] = [
     IntegrationNumberEntityDescription(
         key=EntityKeys.UPDATE_ENTITIES_INTERVAL,
         native_max_value=600,
-        native_min_value=0,
+        native_min_value=1,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         entity_category=EntityCategory.CONFIG,
         device_type=DeviceTypes.SYSTEM,
@@ -132,7 +139,7 @@ ENTITY_DESCRIPTIONS: list[IntegrationEntityDescription] = [
     IntegrationNumberEntityDescription(
         key=EntityKeys.UPDATE_API_INTERVAL,
         native_max_value=600,
-        native_min_value=0,
+        native_min_value=1,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         entity_category=EntityCategory.CONFIG,
         device_type=DeviceTypes.SYSTEM,
@@ -288,6 +295,27 @@ ENTITY_DESCRIPTIONS: list[IntegrationEntityDescription] = [
         entity_category=EntityCategory.CONFIG,
         icon="mdi:monitor-eye",
         device_type=DeviceTypes.DEVICE,
+        # One toggle per device, all on a single device. Everything else a
+        # device has is created only while its toggle is on, so a device that is
+        # never monitored produces no device of its own at all.
+        has_entity_name=True,
+        on_shared_device=True,
+    ),
+    IntegrationSwitchEntityDescription(
+        key=EntityKeys.FIREWALL_RULE_STATUS,
+        icon="mdi:wall-fire",
+        device_type=DeviceTypes.FIREWALL_RULE,
+        entity_validation=EntityValidation.ADMIN_ONLY,
+        # The rule-set is the device and each rule is an entity on it, so the
+        # name comes from the rule and Home Assistant composes the two
+        has_entity_name=True,
+    ),
+    IntegrationBinarySensorEntityDescription(
+        key=EntityKeys.FIREWALL_RULE_STATUS,
+        icon="mdi:wall-fire",
+        device_type=DeviceTypes.FIREWALL_RULE,
+        entity_validation=EntityValidation.NON_ADMIN_ONLY,
+        has_entity_name=True,
     ),
 ]
 
@@ -298,11 +326,9 @@ def get_entity_descriptions(
     is_monitored: bool | None,
     is_admin: bool | None,
 ) -> list[IntegrationEntityDescription]:
-    entity_descriptions = copy(ENTITY_DESCRIPTIONS)
-
     result = [
         entity_description
-        for entity_description in entity_descriptions
+        for entity_description in ENTITY_DESCRIPTIONS
         if entity_description.platform == platform
         and entity_description.device_type == device_type
         and is_valid_entity(entity_description, is_monitored, is_admin)

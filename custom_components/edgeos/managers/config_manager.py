@@ -1,3 +1,4 @@
+from datetime import timedelta
 import json
 import logging
 import sys
@@ -10,7 +11,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import translation
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.json import JSONEncoder
-from homeassistant.helpers.storage import Store
 
 from ..common.consts import (
     CONFIGURATION_FILE,
@@ -21,6 +21,7 @@ from ..common.consts import (
     DEFAULT_UPDATE_ENTITIES_INTERVAL,
     DOMAIN,
     INVALID_TOKEN_SECTION,
+    MINIMUM_UPDATE_INTERVAL,
     STORAGE_DATA_CONSIDER_AWAY_INTERVAL,
     STORAGE_DATA_LOG_INCOMING_MESSAGES,
     STORAGE_DATA_MONITORED_DEVICES,
@@ -32,6 +33,7 @@ from ..common.consts import (
 from ..common.entity_descriptions import IntegrationEntityDescription
 from ..common.enums import DeviceTypes
 from ..models.config_data import ConfigData
+from .store import IntegrationStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class ConfigManager:
     _data: dict | None
     _config_data: ConfigData
 
-    _store: Store | None
+    _store: IntegrationStore | None
     _translations: dict | None
     _password: str | None
     _entry_title: str
@@ -66,7 +68,7 @@ class ConfigManager:
         self._is_initialized = False
 
         if hass is not None:
-            self._store = Store(
+            self._store = IntegrationStore(
                 hass, STORAGE_VERSION, CONFIGURATION_FILE, encoder=JSONEncoder
             )
 
@@ -128,7 +130,7 @@ class ConfigManager:
             DEFAULT_UPDATE_ENTITIES_INTERVAL.total_seconds(),
         )
 
-        return result
+        return self._as_interval(result, DEFAULT_UPDATE_ENTITIES_INTERVAL)
 
     @property
     def update_api_interval(self):
@@ -137,7 +139,19 @@ class ConfigManager:
             DEFAULT_UPDATE_API_INTERVAL.total_seconds(),
         )
 
-        return result
+        return self._as_interval(result, DEFAULT_UPDATE_API_INTERVAL)
+
+    @staticmethod
+    def _as_interval(value, default: timedelta) -> float:
+        """Keep a stored interval usable.
+
+        The store is a plain file a user can edit, and a zero here reschedules
+        the coordinator with no delay at all, which busy-loops the event loop.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            value = default.total_seconds()
+
+        return float(max(value, MINIMUM_UPDATE_INTERVAL))
 
     @property
     def unit(self):
@@ -252,12 +266,21 @@ class ConfigManager:
 
         return is_monitored
 
+    def get_monitored_items(self, device_type: DeviceTypes) -> dict:
+        if device_type == DeviceTypes.DEVICE:
+            monitored_items = self.monitored_devices
+
+        else:
+            monitored_items = self.monitored_interfaces
+
+        return monitored_items
+
     async def _load(self):
         self._data = None
 
         await self._load_config_from_file()
 
-        _LOGGER.info(f"loaded: {self._data}")
+        _LOGGER.debug(f"Loaded stored configuration: {self._data}")
         should_save = False
 
         if self._data is None:
@@ -265,18 +288,18 @@ class ConfigManager:
             self._data = {}
 
         default_configuration = self._get_defaults()
-        _LOGGER.info(f"default_configuration: {default_configuration}")
+        _LOGGER.debug(f"Default configuration: {default_configuration}")
 
         for key in default_configuration:
             value = default_configuration[key]
 
             if key not in self._data:
-                _LOGGER.info(f"adding {key}")
+                _LOGGER.debug(f"Adding missing setting {key}")
                 should_save = True
                 self._data[key] = value
 
         if should_save:
-            _LOGGER.info("updated")
+            _LOGGER.debug("Stored configuration updated")
             await self._save()
 
     @staticmethod
@@ -333,7 +356,8 @@ class ConfigManager:
             stored_value = entry_data.get(key)
 
             if key in [CONF_PASSWORD, CONF_USERNAME]:
-                entry_data.pop(key)
+                # A store written by an older version may not carry the key
+                entry_data.pop(key, None)
 
                 if stored_value is not None:
                     should_save = True

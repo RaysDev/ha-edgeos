@@ -3,7 +3,7 @@ import sys
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -75,6 +75,9 @@ class IntegrationBaseEntity(CoordinatorEntity):
     ):
         super().__init__(coordinator)
 
+        self._entity_description = entity_description
+        self._is_available = False
+
         try:
             self.hass = hass
             self._item_id = item_id
@@ -82,8 +85,8 @@ class IntegrationBaseEntity(CoordinatorEntity):
 
             device_info = coordinator.get_device_info(entity_description, item_id)
 
-            entity_name = coordinator.config_manager.get_entity_name(
-                entity_description, device_info
+            entity_name = coordinator.get_entity_name(
+                entity_description, device_info, item_id
             )
 
             unique_id_parts = [
@@ -127,25 +130,37 @@ class IntegrationBaseEntity(CoordinatorEntity):
         return self._data
 
     @property
-    def _is_allowed_for_monitoring(self) -> bool:
-        is_allowed_for_monitoring = False
+    def available(self) -> bool:
+        return self._is_available
 
-        if self._device_type == DeviceTypes.DEVICE:
-            is_allowed_for_monitoring = (
-                self.coordinator.config_manager.get_monitored_interface(self._item_id)
-            )
+    def _get_is_available(self) -> bool:
+        """Report the entity as unavailable while the router cannot be reached.
 
-        if self._device_type == DeviceTypes.DEVICE:
-            is_allowed_for_monitoring = (
-                self.coordinator.config_manager.get_monitored_device(self._item_id)
-            )
+        Configuration entities hold Home Assistant side settings, they remain
+        usable so that the integration can still be configured while the router
+        is down.
+        """
+        if not self.coordinator.last_update_success:
+            return False
 
-        return is_allowed_for_monitoring
+        entity_description = self._entity_description
+
+        if (
+            entity_description is not None
+            and entity_description.entity_category == EntityCategory.CONFIG
+        ):
+            return True
+
+        return self._local_coordinator.is_connected
 
     async def async_execute_device_action(self, key: str, *kwargs: Any):
         async_device_action = self._local_coordinator.get_device_action(
             self._entity_description, self._item_id, key
         )
+
+        # The coordinator has already reported why, and there is nothing to run
+        if async_device_action is None:
+            return
 
         if self._item_id is None:
             await async_device_action(self._entity_description, *kwargs)
@@ -158,6 +173,28 @@ class IntegrationBaseEntity(CoordinatorEntity):
     def update_component(self, data):
         pass
 
+    def _refresh_name(self) -> bool:
+        """Follow a name that comes from the item rather than the entity kind.
+
+        A firewall rule is named after its description, so renaming the rule on
+        the router has to rename the entity. Only those entities are checked -
+        everything else is named after its kind, which cannot change while the
+        entity exists.
+        """
+        if not self._entity_description.has_entity_name:
+            return False
+
+        name = self._local_coordinator.get_entity_name(
+            self._entity_description, self._attr_device_info, self._item_id
+        )
+
+        if name is None or name == self._attr_name:
+            return False
+
+        self._attr_name = name
+
+        return True
+
     def _handle_coordinator_update(self) -> None:
         """Fetch new state parameters for the sensor."""
         try:
@@ -165,10 +202,21 @@ class IntegrationBaseEntity(CoordinatorEntity):
                 self._entity_description, self._item_id
             )
 
-            if self._data != new_data:
+            is_available = self._get_is_available()
+
+            name_changed = self._refresh_name()
+
+            # Availability is written as well, a router that went away does not
+            # change the data and would otherwise keep reporting the last value
+            if (
+                self._data != new_data
+                or self._is_available != is_available
+                or name_changed
+            ):
                 self.update_component(new_data)
 
                 self._data = new_data
+                self._is_available = is_available
 
                 self.async_write_ha_state()
 

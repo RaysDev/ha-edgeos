@@ -4,7 +4,7 @@
 
 Provides an integration between EdgeOS (Ubiquiti) routers to Home Assistant.
 
-[Changelog](https://github.com/elad-bar/ha-edgeos/blob/master/CHANGELOG.md)
+[Changelog](https://github.com/blchinezu/ha-edgeos/blob/master/CHANGELOG.md)
 
 ## How to
 

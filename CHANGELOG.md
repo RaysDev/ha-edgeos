@@ -1,5 +1,115 @@
 # Changelog
 
+## 3.0.0
+
+The first release since 2.1.9.
+
+### Works with EdgeOS 3.x
+
+2.1.9 cannot log in to an EdgeOS 3.x router at all. 3.x stopped issuing the `PHPSESSID` cookie that login
+detection relied on, and moved the WebSocket session id into the body of `/api/edge/get.json`
+([#168](https://github.com/elad-bar/ha-edgeos/issues/168), based on
+[#171](https://github.com/elad-bar/ha-edgeos/pull/171)).
+
+### Firewall rules
+
+Every rule of every IPv4 (`firewall name`) and IPv6 (`firewall ipv6-name`) rule-set on the router is
+discovered, and can be switched on and off from Home Assistant.
+
+- A rule-set is a device and each of its rules is one switch on it, so a router with eighty rules adds a
+  handful of devices rather than eighty
+- Rules are named after their description on the router. `block-kid-tablet` reads as `Block Kid Tablet`;
+  a description already written as prose is used exactly as typed; `DNS`, `WAN` and `IPv6` are left
+  intact. A rule with no description falls back to `rule 760`
+- Toggling one adds or removes the rule's `disable` node, exactly as the router's own web interface does -
+  committed and saved, so it survives a reboot. An account without admin rights gets a read-only sensor
+  instead of a switch
+- Renaming a rule on the router renames its entity within about a second, without stranding the old one or
+  creating a second
+- A rule-set deleted on the router takes its device and entities with it, rather than leaving them behind
+  permanently unavailable
+
+### One device for all the monitoring toggles
+
+Every device on your network needed a Home Assistant device of its own purely to carry its `Monitored`
+switch. On a router with fifty static mappings that is fifty devices showing one switch each.
+
+- The toggles now sit together on `{Router} Device Monitoring`, each named after its device's hostname -
+  `iPhone-Gabi` reads `iPhone Gabi`, `NAS_Main` reads `NAS Main`
+- A device only gets a device of its own once you switch its toggle on. Switch it off and its entities
+  go, and the emptied device is removed a couple of minutes later
+- **The switches keep their entity ids and their history**, so existing automations carry on working. The
+  devices of anything you have not monitored are deleted, though - along with any rename you gave one
+
+### Firmware shown as an update
+
+- The router's firmware is an `update` entity, showing the installed version, the available one and a link
+  to the release, rather than a binary sensor that could only be on or off
+- A router that has never checked for updates now reports its latest version as unknown rather than as up
+  to date, which the old sensor had no way to distinguish
+- **This replaces `binary_sensor.<router>_firmware_updates`**, so an automation on that needs repointing.
+  The old entity is removed on upgrade instead of being left behind permanently unavailable
+
+### Stays connected
+
+2.1.9 could stop talking to the router and never recover: a router that was down when Home Assistant
+started, or that rebooted, left the integration idle until Home Assistant itself was restarted. See
+[docs/connection-reliability.md](docs/connection-reliability.md).
+
+- One supervisor owns the connection and retries forever, backing off while the router stays unreachable
+  and reconnecting promptly after a connection that had been working
+- The integration sets itself up immediately rather than waiting for Home Assistant to finish starting,
+  which removes the race between Home Assistant and the router booting
+- A WebSocket whose peer vanished without closing the connection is now noticed, instead of leaving the
+  integration believing it is still connected
+- Invalid credentials are retried every five minutes rather than stopping the integration permanently, so
+  fixing the password on the router is enough to bring it back
+- Entities report as unavailable while the router cannot be reached, instead of showing their last known
+  value indefinitely
+
+### Reacts to changes on the router
+
+See [docs/event-driven-updates.md](docs/event-driven-updates.md).
+
+- Changes made on the router - from its web interface, its command line, or anywhere else - show up in
+  about a second rather than at the next poll, because the router announces them
+- A switch you toggle holds its new position until the router confirms it, instead of snapping back and
+  staying wrong for up to a minute
+
+### Security
+
+- Diagnostics no longer contain the router's session cookies or its entire configuration, which includes
+  user password hashes, VPN keys and dynamic DNS credentials. Diagnostics are the file people attach to
+  bug reports
+- The router password is no longer written to the Home Assistant log in clear text, either when adding
+  the integration or when opening its options
+
+### Smaller fixes
+
+- A device's address is kept up to date. It used to be fixed at whatever it was when the device was first
+  seen, so a device that changed address had its traffic sensors freeze and its tracker stick at away
+- A device with a static mapping is no longer hidden when it appears in the lease list first
+- Leased devices are counted correctly, including on routers where `Unknown Devices` always reported zero
+- Entities come back immediately after toggling `Monitored` or `Unit`, instead of being missing for up to
+  a minute
+- An update interval of zero is refused. It used to pin a CPU core, and recovering meant editing the
+  stored configuration by hand
+- Stored settings survive a change of Home Assistant's storage version, which would previously have lost
+  them along with the key that decrypts the router password
+- The configuration flow shows an error when a connection fails, rather than re-displaying the form as
+  though nothing had happened
+- Pressing a switch for something the router no longer has no longer raises
+- Data is no longer discarded when the router is reachable but has not yet reported its configuration
+
+### Internals
+
+- The router's configuration is re-derived only when it has actually changed, rather than on every
+  streamed message - noticeably less work on lower-powered hardware
+- Thirteen offline test suites, run with `tests/run.sh`, needing neither a Home Assistant installation nor
+  a reachable router
+- `tools/probe_router.py`, a read-only tool reporting what a given router exposes
+- Dead code removed, including an unused API heartbeat and a duplicate exceptions module
+
 ## 2.1.9
 
 - Initialize data using `async_request_refresh` instead of `async_config_entry_first_refresh` to remove warning message

@@ -6,6 +6,25 @@ class DeviceTypes(StrEnum):
     DEVICE = "Device"
     INTERFACE = "Interface"
 
+    # The device holding one monitoring toggle per EdgeOS device. `DEVICE` still
+    # routes those entities to their processor; this is the model of the device
+    # they sit on.
+    DEVICE_LIST = "Device List"
+
+    # A rule is an entity, not a device. `FIREWALL_RULE` still routes an entity
+    # to its processor, while `FIREWALL_RULESET` is the model of the device that
+    # holds the rules - and tells a device created by this version apart from the
+    # per rule devices earlier versions created.
+    FIREWALL_RULE = "Firewall Rule"
+    FIREWALL_RULESET = "Firewall Rule Set"
+
+
+class FirewallRulesetTypes(StrEnum):
+    """Key of the rule-set collection within the `firewall` configuration section."""
+
+    IPV4 = "name"
+    IPV6 = "ipv6-name"
+
 
 class InterfaceTypes(StrEnum):
     BRIDGE = "bridge"
@@ -58,6 +77,8 @@ class EntityKeys(StrEnum):
     DEVICE_SENT_TRAFFIC = "device_sent_traffic"
     DEVICE_TRACKER = "device_tracker"
     DEVICE_MONITORED = "device_monitored"
+
+    FIREWALL_RULE_STATUS = "firewall_rule_status"
 
 
 class UnitOfEdgeOS(StrEnum):

@@ -1,12 +1,12 @@
 {
   "domain": "edgeos",
   "name": "Ubiquiti EdgeOS Routers",
-  "codeowners": ["@elad-bar"],
+  "codeowners": ["@blchinezu"],
   "config_flow": true,
   "dependencies": ["http"],
-  "documentation": "https://github.com/elad-bar/ha-edgeos",
-  "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/elad-bar/ha-edgeos/issues",
+  "documentation": "https://github.com/blchinezu/ha-edgeos",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/blchinezu/ha-edgeos/issues",
   "requirements": ["aiohttp"],
-  "version": "2.1.9"
+  "version": "3.0.0"
 }

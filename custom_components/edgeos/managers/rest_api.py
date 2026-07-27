@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from asyncio import sleep
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import logging
 import sys
@@ -29,7 +29,6 @@ from ..common.consts import (
     API_SET,
     API_URL_DATA,
     API_URL_DATA_SUBSET,
-    API_URL_HEARTBEAT,
     API_URL_PARAMETER_ACTION,
     API_URL_PARAMETER_BASE_URL,
     API_URL_PARAMETER_SUBSET,
@@ -37,10 +36,11 @@ from ..common.consts import (
     COOKIE_BEAKER_SESSION_ID,
     COOKIE_CSRF_TOKEN,
     COOKIE_PHPSESSID,
+    DATA_SYSTEM_FIREWALL,
     DEFAULT_NAME,
     EMPTY_STRING,
+    FIREWALL_DATA_RULE,
     HEADER_CSRF_TOKEN,
-    HEARTBEAT_MAX_AGE,
     MAXIMUM_RECONNECT,
     RESPONSE_ERROR_KEY,
     RESPONSE_FAILURE_CODE,
@@ -53,8 +53,10 @@ from ..common.consts import (
     SYSTEM_DATA_DISABLE,
     TRUE_STR,
     UPDATE_DATE_ENDPOINTS,
+    WS_SESSION_ID,
 )
 from ..models.config_data import ConfigData
+from ..models.edge_os_firewall_rule_data import EdgeOSFirewallRuleData
 from ..models.edge_os_interface_data import EdgeOSInterfaceData
 from ..models.exceptions import SessionTerminatedException
 
@@ -71,8 +73,6 @@ class RestAPI:
     _entry_id: str | None
     _dispatched_devices: list
     _dispatched_server: bool
-
-    _last_valid: datetime | None
 
     def __init__(
         self, hass: HomeAssistant, config_data: ConfigData, entry_id: str | None = None
@@ -94,7 +94,6 @@ class RestAPI:
             self._entry_id = entry_id
             self._dispatched_devices = []
             self._dispatched_server = False
-            self._last_valid = None
 
         except Exception as ex:
             exc_type, exc_obj, tb = sys.exc_info()
@@ -103,12 +102,6 @@ class RestAPI:
             _LOGGER.error(
                 f"Failed to load {DEFAULT_NAME} API, error: {ex}, line: {line_number}"
             )
-
-    @property
-    def is_connected(self):
-        result = self._session is not None
-
-        return result
 
     @property
     def status(self) -> str | None:
@@ -150,6 +143,9 @@ class RestAPI:
 
         self._set_status(ConnectivityStatus.Connecting)
 
+        # A reconnect must not reuse the cookies of the dead session
+        self._cookies = {}
+
         cookie_jar = CookieJar(unsafe=True)
 
         await self._initialize_session(cookie_jar)
@@ -159,7 +155,24 @@ class RestAPI:
     async def validate(self):
         await self.initialize()
 
-        await self.login()
+    async def terminate(self):
+        """Release the client session held by this instance."""
+        await self._close_session()
+
+        self._set_status(ConnectivityStatus.Disconnected)
+
+    async def _close_session(self):
+        session = self._session
+        self._session = None
+
+        if session is None or session.closed:
+            return
+
+        try:
+            await session.close()
+
+        except Exception as ex:
+            _LOGGER.debug(f"Failed to close API session, Error: {ex}")
 
     def _get_cookie_data(self, cookie_key):
         cookie_data = None
@@ -220,7 +233,10 @@ class RestAPI:
                             result = await response.json()
                             break
                         elif status == 403:
-                            self._session = None
+                            # The session is no longer accepted, drop the stale
+                            # cookies and let the supervisor log in again. The
+                            # session object itself is kept so that it can be
+                            # closed properly rather than leaked.
                             self._cookies = {}
 
                             break
@@ -282,9 +298,8 @@ class RestAPI:
     async def update(self):
         _LOGGER.debug(f"Updating data from device ({self._config_data.hostname})")
 
-        if self.status == ConnectivityStatus.Failed:
-            await self.initialize()
-
+        # Reconnecting is owned by the coordinator's connection supervisor, so
+        # that there is exactly one place deciding when to log in again
         if self.status == ConnectivityStatus.Connected:
             await self._load_system_data()
 
@@ -294,6 +309,23 @@ class RestAPI:
             self.data[API_DATA_LAST_UPDATE] = datetime.now().isoformat()
 
             self._async_dispatcher_send(SIGNAL_DATA_CHANGED)
+
+    async def refresh_configuration(self):
+        """Re-read only the configuration section.
+
+        Used in response to a commit on the router, where the statistics
+        endpoints have not changed and re-fetching them would just add load.
+        """
+        if self.status != ConnectivityStatus.Connected:
+            return
+
+        _LOGGER.debug("Refreshing configuration")
+
+        await self._load_system_data()
+
+        self.data[API_DATA_LAST_UPDATE] = datetime.now().isoformat()
+
+        self._async_dispatcher_send(SIGNAL_DATA_CHANGED)
 
     async def login(self):
         try:
@@ -315,12 +347,22 @@ class RestAPI:
 
                 response.raise_for_status()
 
-                logged_in = (
-                    self.beaker_session_id is not None
-                    and self.beaker_session_id == self.session_id
-                )
+                # EdgeOS 2.x issued both `beaker.session.id` and `PHPSESSID` with
+                # the same value, and a successful login used to be detected by
+                # comparing them. EdgeOS 3.x stopped issuing `PHPSESSID`, so that
+                # comparison always failed and reported invalid credentials (#168).
+                # The session cookie is what authenticates every later request, so
+                # its presence is what marks the login as accepted.
+                logged_in = self.beaker_session_id is not None
 
                 if logged_in:
+                    self.data[API_DATA_COOKIES] = self._cookies
+
+                    # EdgeOS 2.x: the WebSocket session id is the `PHPSESSID` cookie.
+                    # EdgeOS 3.x: it is only returned in the body of
+                    # `/api/edge/get.json`, which `_load_system_data` picks up below.
+                    self.data[API_DATA_SESSION_ID] = self.session_id
+
                     html = await response.text()
                     html_lines = html.splitlines()
                     for line in html_lines:
@@ -330,19 +372,19 @@ class RestAPI:
                             self.data[API_DATA_PRODUCT] = value.replace(
                                 "'", EMPTY_STRING
                             )
-                            self.data[API_DATA_SESSION_ID] = self.session_id
-                            self.data[API_DATA_COOKIES] = self._cookies
-
-                            self._set_status(ConnectivityStatus.Connected)
 
                             break
+
+                    self._set_status(ConnectivityStatus.Connected)
+
+                    # Loaded as part of the login, so that SESSION_ID is available
+                    # before the coordinator opens the WebSocket and sends its
+                    # subscription payload.
+                    await self._load_system_data()
                 else:
                     _LOGGER.error("Failed to login, Invalid credentials")
 
-                    if self.beaker_session_id is None and self.session_id is not None:
-                        self._set_status(ConnectivityStatus.Failed)
-                    else:
-                        self._set_status(ConnectivityStatus.InvalidCredentials)
+                    self._set_status(ConnectivityStatus.InvalidCredentials)
 
         except SessionTerminatedException:
             self._set_status(ConnectivityStatus.Disconnected)
@@ -359,6 +401,8 @@ class RestAPI:
 
     async def _initialize_session(self, cookie_jar=None):
         try:
+            await self._close_session()
+
             if self._is_home_assistant:
                 self._session = async_create_clientsession(
                     hass=self._hass, cookies=self._cookies, cookie_jar=cookie_jar
@@ -402,47 +446,19 @@ class RestAPI:
         else:
             dispatcher_send(self._hass, signal, self._entry_id, *args)
 
-    async def async_send_heartbeat(self, max_age=HEARTBEAT_MAX_AGE):
-        ts = None
-
-        try:
-            if self.status == ConnectivityStatus.Connected:
-                ts = datetime.now()
-                current_invocation = datetime.now() - self._last_valid
-                if current_invocation > timedelta(seconds=max_age):
-                    current_ts = str(int(ts.timestamp()))
-
-                    response = await self._async_get(
-                        API_URL_HEARTBEAT, timestamp=current_ts
-                    )
-
-                    if response is not None:
-                        _LOGGER.debug(f"Heartbeat response: {response}")
-
-                        self._last_valid = ts
-            else:
-                _LOGGER.debug(
-                    "Ignoring request to send heartbeat, Reason: closed session"
-                )
-        except Exception as ex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
-
-            _LOGGER.error(
-                f"Failed to perform heartbeat, Error: {ex}, Line: {line_number}"
-            )
-
-        is_valid = ts is not None and self._last_valid == ts
-
-        if not is_valid:
-            self._set_status(ConnectivityStatus.Disconnected)
-
     async def _load_system_data(self):
         try:
             if self.status == ConnectivityStatus.Connected:
                 result_json = await self._async_get(API_URL_DATA, action=API_GET)
 
                 if result_json is not None:
+                    # EdgeOS 3.x returns the id of the session used by the
+                    # WebSocket in the body instead of as the `PHPSESSID` cookie.
+                    session_id = result_json.get(WS_SESSION_ID)
+
+                    if session_id is not None:
+                        self.data[API_DATA_SESSION_ID] = session_id
+
                     if RESPONSE_SUCCESS_KEY in result_json:
                         success_key = str(
                             result_json.get(RESPONSE_SUCCESS_KEY, "")
@@ -505,14 +521,51 @@ class RestAPI:
     ):
         _LOGGER.info(f"Set state of interface {interface.name} to {is_enabled}")
 
-        modified = False
-        action = API_DELETE if is_enabled else API_SET
-
         data = {
             API_DATA_INTERFACES: {
                 interface.interface_type: {interface.name: {SYSTEM_DATA_DISABLE: None}}
             }
         }
+
+        modified = await self._set_disable_node(data, is_enabled)
+
+        if not modified:
+            _LOGGER.error(
+                f"Failed to set state of interface {interface.name} to {is_enabled}"
+            )
+
+    async def set_firewall_rule_state(
+        self, rule: EdgeOSFirewallRuleData, is_enabled: bool
+    ) -> bool:
+        _LOGGER.info(f"Set state of firewall rule {rule.unique_id} to {is_enabled}")
+
+        data = {
+            DATA_SYSTEM_FIREWALL: {
+                str(rule.ruleset_type): {
+                    rule.ruleset: {
+                        FIREWALL_DATA_RULE: {rule.number: {SYSTEM_DATA_DISABLE: None}}
+                    }
+                }
+            }
+        }
+
+        modified = await self._set_disable_node(data, is_enabled)
+
+        if not modified:
+            _LOGGER.error(
+                f"Failed to set state of firewall rule {rule.unique_id} to {is_enabled}"
+            )
+
+        return modified
+
+    async def _set_disable_node(self, data: dict, is_enabled: bool) -> bool:
+        """Add or remove the valueless `disable` node addressed by `data`.
+
+        EdgeOS marks a configuration node as disabled by adding a `disable` child
+        to it, so enabling means deleting that node and disabling means setting it.
+        """
+        modified = False
+        action = API_DELETE if is_enabled else API_SET
 
         result_json = await self._async_post(API_URL_DATA, data, action=action)
 
@@ -526,7 +579,4 @@ class RestAPI:
 
                 modified = success_key != RESPONSE_FAILURE_CODE
 
-        if not modified:
-            _LOGGER.error(
-                f"Failed to set state of interface {interface.name} to {is_enabled}"
-            )
+        return modified

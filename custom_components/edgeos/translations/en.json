@@ -6,19 +6,24 @@
     "error": {
       "already_configured": "EdgeOS integration already configured with the name",
       "auth_general_error": "General failure, please try again",
+      "corrupted_encryption_key": "The stored encryption key is corrupted, see the integration documentation",
       "empty_device_data": "Could not retrieve device data from EdgeOS Router",
       "incompatible_version": "Unsupported firmware version",
+      "invalid_admin_credentials": "Invalid credentials, or the user is not an administrator of the EdgeOS Router",
       "invalid_credentials": "Invalid credentials to EdgeOS Router",
       "invalid_dpi_configuration": "Deep Packet Inspection (traffic-analysis) configuration is disabled, please enable",
       "invalid_export_configuration": "Export (traffic-analysis) configuration is disabled, please enable",
+      "invalid_server_details": "Could not reach the EdgeOS Router, check the host address",
+      "missing_permanent_api_key": "The EdgeOS Router did not issue a usable session",
       "not_found": "EdgeOS URL not found"
     },
     "step": {
       "user": {
         "data": {
+          "title": "Name",
           "host": "Host",
-          "password": "Password",
-          "username": "Username"
+          "username": "Username",
+          "password": "Password"
         },
         "description": "Set up your EdgeOS Router, note that integration will communicate using HTTPS connection",
         "title": "Set up EdgeOS Router"
@@ -27,14 +32,14 @@
   },
   "entity": {
     "binary_sensor": {
-      "firmware": {
-        "name": "Firmware Upgrade"
-      },
       "interface_connected": {
         "name": "Connected"
       },
       "interface_status": {
         "name": "Status"
+      },
+      "firewall_rule_status": {
+        "name": "Enabled"
       }
     },
     "device_tracker": {
@@ -131,6 +136,14 @@
       },
       "log_incoming_messages": {
         "name": "Log Incoming Messages"
+      },
+      "firewall_rule_status": {
+        "name": "Enabled"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware Upgrade"
       }
     }
   },
@@ -138,23 +151,27 @@
     "error": {
       "already_configured": "EdgeOS integration already configured with the name",
       "auth_general_error": "General failure, please try again",
+      "corrupted_encryption_key": "The stored encryption key is corrupted, see the integration documentation",
       "empty_device_data": "Could not retrieve device data from EdgeOS Router",
       "incompatible_version": "Unsupported firmware version",
+      "invalid_admin_credentials": "Invalid credentials, or the user is not an administrator of the EdgeOS Router",
       "invalid_credentials": "Invalid credentials to EdgeOS Router",
       "invalid_dpi_configuration": "Deep Packet Inspection (traffic-analysis) configuration is disabled, please enable",
       "invalid_export_configuration": "Export (traffic-analysis) configuration is disabled, please enable",
+      "invalid_server_details": "Could not reach the EdgeOS Router, check the host address",
+      "missing_permanent_api_key": "The EdgeOS Router did not issue a usable session",
       "not_found": "EdgeOS URL not found"
     },
     "step": {
-      "edge_os_additional_settings": {
+      "init": {
+        "title": "EdgeOS Router options",
+        "description": "Changing the host, username or password re-validates against the router before anything is saved.",
         "data": {
-          "clear-credentials": "Clear credentials",
+          "title": "Name",
           "host": "Host",
-          "password": "Password",
-          "username": "Username"
-        },
-        "description": "Set up your monitored devices / interfaces and tracked devices, use comma separated values, to clear existing value, use the checkbox.",
-        "title": "Options for EdgeOS."
+          "username": "Username",
+          "password": "Password"
+        }
       }
     }
   }

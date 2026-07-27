@@ -5,9 +5,9 @@
     },
     "error": {
       "already_configured": "Edgeos integrasjon allerede konfigurert med navnet",
-      "auth_general_error": "Generell fiasko, pr\u00f8v igjen",
+      "auth_general_error": "Generell fiasko, prøv igjen",
       "empty_device_data": "Kunne ikke hente enhetsdata fra Edgeos -ruteren",
-      "incompatible_version": "Ikke st\u00f8ttet firmwareversjon",
+      "incompatible_version": "Ikke støttet firmwareversjon",
       "invalid_credentials": "Ugyldig legitimasjon til Edgeos -ruteren",
       "invalid_dpi_configuration": "Dyp pakkeinspeksjon (trafikkanalyse) Konfigurasjon er deaktivert, vennligst aktiver",
       "invalid_export_configuration": "Eksport (trafikkanalyse) Konfigurasjon er deaktivert, vennligst aktiver",
@@ -121,10 +121,10 @@
     },
     "switch": {
       "device_monitored": {
-        "name": "Overv\u00e5ket"
+        "name": "Overvåket"
       },
       "interface_monitored": {
-        "name": "Overv\u00e5ket"
+        "name": "Overvåket"
       },
       "interface_status": {
         "name": "Status"
@@ -137,24 +137,21 @@
   "options": {
     "error": {
       "already_configured": "Edgeos integrasjon allerede konfigurert med navnet",
-      "auth_general_error": "Generell fiasko, pr\u00f8v igjen",
+      "auth_general_error": "Generell fiasko, prøv igjen",
       "empty_device_data": "Kunne ikke hente enhetsdata fra Edgeos -ruteren",
-      "incompatible_version": "Ikke st\u00f8ttet firmwareversjon",
+      "incompatible_version": "Ikke støttet firmwareversjon",
       "invalid_credentials": "Ugyldig legitimasjon til Edgeos -ruteren",
       "invalid_dpi_configuration": "Dyp pakkeinspeksjon (trafikkanalyse) Konfigurasjon er deaktivert, vennligst aktiver",
       "invalid_export_configuration": "Eksport (trafikkanalyse) Konfigurasjon er deaktivert, vennligst aktiver",
       "not_found": "Edgeos url ikke funnet"
     },
     "step": {
-      "edge_os_additional_settings": {
+      "init": {
         "data": {
-          "clear-credentials": "Tydelig legitimasjon",
           "host": "Vert",
           "password": "Passord",
           "username": "Brukernavn"
-        },
-        "description": "Sett opp overv\u00e5kede enheter / grensesnitt og sporede enheter, bruk komma -separerte verdier, for \u00e5 fjerne eksisterende verdi, bruk avkrysningsruten.",
-        "title": "Alternativer for Edgeos."
+        }
       }
     }
   }
