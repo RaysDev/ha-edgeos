@@ -148,6 +148,7 @@ class DeviceProcessor(BaseProcessor):
 
                     for hostname in static_mappings:
                         static_mapping_data = static_mappings.get(hostname, {})
+                        hostname = self._normalize_id(hostname) 
 
                         self._set_device(
                             hostname, domain_name, static_mapping_data, False
@@ -201,7 +202,9 @@ class DeviceProcessor(BaseProcessor):
 
                     static_mapping_data = {
                         DHCP_SERVER_IP_ADDRESS: ip,
-                        DHCP_SERVER_MAC_ADDRESS: device_data.get(DEVICE_DATA_MAC),
+                        DHCP_SERVER_MAC_ADDRESS: self._normalize_id(
+                            device_data.get(DEVICE_DATA_MAC)
+                        ),
                     }
 
                     self._set_device(hostname, None, static_mapping_data, True)
@@ -234,7 +237,10 @@ class DeviceProcessor(BaseProcessor):
         is_leased: bool,
     ):
         ip_address = static_mapping_data.get(DHCP_SERVER_IP_ADDRESS)
-        mac_address = static_mapping_data.get(DHCP_SERVER_MAC_ADDRESS)
+        mac_address = self._normalize_id(
+            static_mapping_data.get(DHCP_SERVER_MAC_ADDRESS)
+        )
+        hostname = self._normalize_id(hostname)
 
         existing_device_data = self._devices.get(mac_address)
 

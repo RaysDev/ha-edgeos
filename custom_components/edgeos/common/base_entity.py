@@ -7,10 +7,12 @@ from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.entity_registry import async_get as async_get_registry
 from homeassistant.util import slugify
 
 from ..managers.coordinator import Coordinator
-from .consts import ADD_COMPONENT_SIGNALS, DOMAIN
+from .consts import ADD_COMPONENT_SIGNALS, DOMAIN, DEFAULT_NAME
 from .entity_descriptions import IntegrationEntityDescription, get_entity_descriptions
 from .enums import DeviceTypes
 
@@ -24,6 +26,11 @@ async def async_setup_base_entry(
     entity_type: type,
     async_add_entities,
 ):
+    #####################################################################
+    # This method gets called by HA for each platform we registered for, 
+    # whenever we signal a new device is found
+    # currently that happens in cordinator.py at _on_device_discovered.
+    #####################################################################
     @callback
     def _async_handle_device(
         entry_id: str, device_type: DeviceTypes, item_id: str | None = None
@@ -46,7 +53,38 @@ async def async_setup_base_entry(
                 for entity_description in entity_descriptions
             ]
 
-            async_add_entities(entities, True)
+
+            #
+            # while the traffic sensor entities are recreated each time we toggle the monitoring switch,
+            # the switch itself does not go away. So no need to keep recreating it.
+            #
+            if platform == Platform.SWITCH and device_type == DeviceTypes.DEVICE:
+                # track created unique_ids per ha config entry so we only skip duplicates in this runtime
+                created_key = f"created_unique_ids_{entry.entry_id}"
+                created_unique_ids = hass.data.setdefault(DOMAIN, {}).setdefault(
+                    created_key, set()
+                )
+
+                # register cleanup so we don't leak the set after unload
+                entry.async_on_unload(
+                    lambda: hass.data.get(DOMAIN, {}).pop(created_key, None)
+                )
+
+                entity_description = entity_descriptions[0]
+                unique_id = _build_unique_id(entity_description, item_id)
+
+                # skip registring/creating new entities with HA if we already created this unique_id during this run
+                if unique_id not in created_unique_ids:
+                    async_add_entities(entities, True)
+                    created_unique_ids.add(unique_id)
+                else:
+                    _LOGGER.debug(
+                        "Skipping duplicate created-this-run entity unique_id=%s",
+                        unique_id,
+                    )
+
+            else:
+                async_add_entities(entities, True)
 
         except Exception as ex:
             exc_type, exc_obj, tb = sys.exc_info()
@@ -60,6 +98,18 @@ async def async_setup_base_entry(
         entry.async_on_unload(
             async_dispatcher_connect(hass, add_component_signal, _async_handle_device)
         )
+
+
+# Reusable function for building unique id. 
+def _build_unique_id(entity_description, item_id):
+    unique_id_parts = [
+        DOMAIN,
+        entity_description.platform,
+        entity_description.key,
+        item_id,
+    ]
+    unique_id_parts_clean = [str(p) for p in unique_id_parts if p is not None]
+    return slugify("_".join(unique_id_parts_clean))
 
 
 class IntegrationBaseEntity(CoordinatorEntity):
@@ -89,20 +139,7 @@ class IntegrationBaseEntity(CoordinatorEntity):
                 entity_description, device_info, item_id
             )
 
-            unique_id_parts = [
-                DOMAIN,
-                entity_description.platform,
-                entity_description.key,
-                item_id,
-            ]
-
-            unique_id_parts_clean = [
-                unique_id_part
-                for unique_id_part in unique_id_parts
-                if unique_id_part is not None
-            ]
-
-            unique_id = slugify("_".join(unique_id_parts_clean))
+            unique_id = _build_unique_id(entity_description, item_id)
 
             self.entity_description = entity_description
             self._entity_description = entity_description

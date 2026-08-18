@@ -423,8 +423,10 @@ class Coordinator(DataUpdateCoordinator):
         key = f"{DeviceTypes.DEVICE} {device_mac}"
 
         if key not in self._discovered_objects:
+            _LOGGER.info(f"Discovered device {device_mac}, Key: {key}")
             self._discovered_objects.add(key)
 
+            # this triggers adding the sensors and the switch.
             async_dispatcher_send(
                 self.hass,
                 SIGNAL_DEVICE_ADDED,
@@ -1536,7 +1538,12 @@ class Coordinator(DataUpdateCoordinator):
                         device_data.id
                     )
                     for entity in entities:
+                        _LOGGER.info(f"Removing entity {entity.entity_id}")
                         entity_registry.async_remove(entity.entity_id)
+
+                    device_id = next( (item[1] for item in device_data.identifiers if item[0] == DEFAULT_NAME), None,)
+                    _LOGGER.info(f"Removing device {device_id}")
+                    device_registry.async_remove_device(device_data.id)
 
                 if key in self._discovered_objects:
                     self._discovered_objects.remove(key)

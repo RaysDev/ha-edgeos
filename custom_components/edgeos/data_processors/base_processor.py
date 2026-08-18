@@ -55,6 +55,18 @@ class BaseProcessor:
 
         self._process_ws_data()
 
+    @staticmethod
+    def _normalize_id(value: str | None) -> str | None:
+        """Normalize externally supplied identifiers to lowercase.
+
+        The API/websocket data contains mixed-case MAC addresses and hostnames.
+        Keep all internal lookups lowercase so "aa:bb" and "AA:BB" resolve to the
+        same record.
+        """
+        if value is None:
+            return None
+        return value.lower()
+
     def _process_api_data(self):
         system_section = self._api_data.get(API_DATA_SYSTEM, {})
         system_details = system_section.get(DATA_SYSTEM_SYSTEM, {})
