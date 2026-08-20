@@ -148,7 +148,7 @@ class DeviceProcessor(BaseProcessor):
 
                     for hostname in static_mappings:
                         static_mapping_data = static_mappings.get(hostname, {})
-                        hostname = self._normalize_id(hostname) 
+                        hostname = self._normalize_id(hostname)
 
                         self._set_device(
                             hostname, domain_name, static_mapping_data, False
@@ -178,6 +178,18 @@ class DeviceProcessor(BaseProcessor):
 
                 if device_item is not None:
                     self._update_device_stats(device_item, stats)
+
+            # get list of devices that are in the existing self._devices_ip_mapping but not in the _ws_data, and set their stats to 0
+            zero_stats = {
+                f"{direction}_{stat_key}": 0
+                for direction in ["received", "sent"]
+                for stat_key in TRAFFIC_DATA_DEVICE_ITEMS
+            }
+            for device_ip in self._devices_ip_mapping:
+                if device_ip not in device_data:
+                    device_item = self._get_device_by_ip(device_ip)
+                    if device_item is not None:
+                        self._update_device_stats(device_item, zero_stats)
 
         except Exception as ex:
             exc_type, exc_obj, tb = sys.exc_info()
