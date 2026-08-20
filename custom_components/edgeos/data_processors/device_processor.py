@@ -267,9 +267,11 @@ class DeviceProcessor(BaseProcessor):
             if not is_leased:
                 device_data.is_leased = False
 
-            # `hostname` is deliberately left alone. `get_device_info` builds the
-            # device identifier from it, so changing it here would orphan the
-            # device already registered in Home Assistant.
+            # Update hostname if it has changed. This allows entity IDs to follow
+            # hostname changes on the router, though it will orphan existing entity
+            # history in Home Assistant.
+            if hostname is not None and device_data.hostname != hostname:
+                device_data.hostname = hostname
 
         self._devices[device_data.unique_id] = device_data
         self._devices_ip_mapping[device_data.ip] = device_data.unique_id
